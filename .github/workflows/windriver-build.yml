@@ -16,6 +16,7 @@ jobs:
     strategy:
       matrix:
         configuration: [Release]
+        # Experimental Win32 build checks whether Intel's driver still supports 32-bit Windows.
         platform: [x64, Win32]
     steps:
       - name: Harden Runner
