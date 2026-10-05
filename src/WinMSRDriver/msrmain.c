@@ -157,6 +157,8 @@ NTSTATUS deviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     PCI_SLOT_NUMBER slot;
     unsigned size = 0;
     PROCESSOR_NUMBER ProcNumber;
+    PROCESSOR_NUMBER CurrentProcNumber;
+    BOOLEAN affinityChanged = FALSE;
     struct DeviceExtension* pExt = NULL;
     LARGE_INTEGER offset;
     SIZE_T mmapSize = 0;
@@ -181,6 +183,7 @@ NTSTATUS deviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
             output = (ULONG64 *)Irp->AssociatedIrp.SystemBuffer;
 
             RtlSecureZeroMemory(&ProcNumber, sizeof(PROCESSOR_NUMBER));
+            RtlSecureZeroMemory(&CurrentProcNumber, sizeof(PROCESSOR_NUMBER));
 
             switch (IrpStackLocation->Parameters.DeviceIoControl.IoControlCode)
             {
@@ -192,10 +195,26 @@ NTSTATUS deviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
                 }
                 RtlSecureZeroMemory(&new_affinity, sizeof(GROUP_AFFINITY));
                 RtlSecureZeroMemory(&old_affinity, sizeof(GROUP_AFFINITY));
+                affinityChanged = FALSE;
                 KeGetProcessorNumberFromIndex(input_msr_req->core_id, &ProcNumber);
-                new_affinity.Group = ProcNumber.Group;
-                new_affinity.Mask = 1ULL << (ProcNumber.Number);
-                KeSetSystemGroupAffinityThread(&new_affinity, &old_affinity);
+                KeGetCurrentProcessorNumberEx(&CurrentProcNumber);
+
+                /*
+                  Avoid an unnecessary scheduler affinity round-trip when the
+                  caller is already running on the requested logical processor.
+                  This is the common path for IVYPMON, which pins the whole PMU
+                  access batch before issuing the MSR IOCTLs. Keep Intel's
+                  original core_id behavior for callers that are not pinned.
+                */
+                if ((CurrentProcNumber.Group != ProcNumber.Group) ||
+                    (CurrentProcNumber.Number != ProcNumber.Number))
+                {
+                    new_affinity.Group = ProcNumber.Group;
+                    new_affinity.Mask = 1ULL << (ProcNumber.Number);
+                    KeSetSystemGroupAffinityThread(&new_affinity, &old_affinity);
+                    affinityChanged = TRUE;
+                }
+
                 __try
                 {
                     __writemsr(input_msr_req->msr_address, input_msr_req->write_value);
@@ -206,7 +225,11 @@ NTSTATUS deviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
                     DbgPrint("Error: exception with code 0x%X in IO_CTL_MSR_WRITE core 0x%X msr 0x%llX value 0x%llX\n",
                         status, input_msr_req->core_id, input_msr_req->msr_address, input_msr_req->write_value);
                 }
-                KeRevertToUserGroupAffinityThread(&old_affinity);
+
+                if (affinityChanged)
+                {
+                    KeRevertToUserGroupAffinityThread(&old_affinity);
+                }
                 Irp->IoStatus.Information = 0;                         // result size
                 break;
             case IO_CTL_MSR_READ:
@@ -217,10 +240,19 @@ NTSTATUS deviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
                 }
                 RtlSecureZeroMemory(&new_affinity, sizeof(GROUP_AFFINITY));
                 RtlSecureZeroMemory(&old_affinity, sizeof(GROUP_AFFINITY));
+                affinityChanged = FALSE;
                 KeGetProcessorNumberFromIndex(input_msr_req->core_id, &ProcNumber);
-                new_affinity.Group = ProcNumber.Group;
-                new_affinity.Mask = 1ULL << (ProcNumber.Number);
-                KeSetSystemGroupAffinityThread(&new_affinity, &old_affinity);
+                KeGetCurrentProcessorNumberEx(&CurrentProcNumber);
+
+                if ((CurrentProcNumber.Group != ProcNumber.Group) ||
+                    (CurrentProcNumber.Number != ProcNumber.Number))
+                {
+                    new_affinity.Group = ProcNumber.Group;
+                    new_affinity.Mask = 1ULL << (ProcNumber.Number);
+                    KeSetSystemGroupAffinityThread(&new_affinity, &old_affinity);
+                    affinityChanged = TRUE;
+                }
+
                 __try
                 {
                     *output = __readmsr(input_msr_req->msr_address);
@@ -231,7 +263,11 @@ NTSTATUS deviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
                     DbgPrint("Error: exception with code 0x%X in IO_CTL_MSR_READ core 0x%X msr 0x%llX\n",
                         status, input_msr_req->core_id, input_msr_req->msr_address);
                 }
-                KeRevertToUserGroupAffinityThread(&old_affinity);
+
+                if (affinityChanged)
+                {
+                    KeRevertToUserGroupAffinityThread(&old_affinity);
+                }
                 Irp->IoStatus.Information = sizeof(ULONG64);                         // result size
                 break;
             case IO_CTL_MMAP_SUPPORT:
