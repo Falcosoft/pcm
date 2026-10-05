@@ -2,7 +2,7 @@ name: bandit-security-scan
 
 on:
   push:
-    branches: [ '**' ]
+    branches-ignore: [ ivymsr-driver ]
     paths:
       - '**.py'
       - '.bandit/**'

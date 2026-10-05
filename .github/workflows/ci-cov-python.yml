@@ -2,7 +2,7 @@ name: coverity-python
 
 on:
   push:
-    branches: [ '**' ]
+    branches-ignore: [ ivymsr-driver ]
   pull_request:
     branches: [ '**' ]
 

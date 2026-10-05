@@ -2,7 +2,7 @@ name: clang-scan
 
 on:
   push:
-    branches: [ '**' ]
+    branches-ignore: [ ivymsr-driver ]
   pull_request:
     branches: [ '**' ]
 

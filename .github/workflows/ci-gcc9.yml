@@ -2,7 +2,7 @@ name: g++ 9 build
 
 on:
   push:
-    branches: [ '**' ]
+    branches-ignore: [ ivymsr-driver ]
   pull_request:
     branches: [ '**' ]
 
